@@ -27,7 +27,6 @@
 #include <sys/types.h>
 #include <utils/Timers.h>
 
-
 /*****************************************************************************/
 
 struct sensors_event_t;
@@ -38,6 +37,7 @@ protected:
     const char* data_name;
     int         dev_fd;
     int         data_fd;
+    char        input_name[PATH_MAX];
 
     static int openInput(const char* inputName);
     static int64_t getTimestamp();

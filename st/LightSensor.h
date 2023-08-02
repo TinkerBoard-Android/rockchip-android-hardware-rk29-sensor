@@ -22,7 +22,7 @@
 #include <sys/cdefs.h>
 #include <sys/types.h>
 
-#include "nusensors.h"
+#include "sensors.h"
 #include "SensorBase.h"
 #include "InputEventReader.h"
 
@@ -35,10 +35,14 @@ class LightSensor : public SensorBase {
     InputEventCircularReader mInputReader;
     sensors_event_t mPendingEvent;
     bool mHasPendingEvent;
+    char input_sysfs_path[PATH_MAX];
+    int input_sysfs_path_len;
 
-    float mPreviousLight;
-    float indexToValue(size_t index) const;
     int setInitialState();
+    int32_t als_val, white_val;
+    double lux_val, cct_val;
+    void calVal();
+    void calLux();
 
 public:
             LightSensor();
@@ -47,8 +51,9 @@ public:
     virtual bool hasPendingEvents() const;
     virtual int setDelay(int32_t handle, int64_t ns);
     virtual int enable(int32_t handle, int enabled);
-    virtual int isActivated(int handle);
+    virtual int loadCaliVal();
 };
+
 /*****************************************************************************/
 
 #endif  // ANDROID_LIGHT_SENSOR_H

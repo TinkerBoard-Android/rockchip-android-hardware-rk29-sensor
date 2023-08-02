@@ -109,7 +109,7 @@ static const struct sensor_t sSensorList[] = {
         #endif
         #ifdef LIGHT_SENSOR_SUPPORT
         { .name       = "Light sensor",
-          .vendor     = "The Android Open Source Project",
+          .vendor     = "CM32183 light sensor",
           .version    = 1,
           .handle     = SENSORS_HANDLE_BASE+ID_L,
           .type       = SENSOR_TYPE_LIGHT,

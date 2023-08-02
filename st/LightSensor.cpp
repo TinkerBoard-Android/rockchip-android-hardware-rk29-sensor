@@ -21,14 +21,18 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <sys/select.h>
-#include <log/log.h>
+#include <cutils/log.h>
+#include <stdio.h>
 
-#include "isl29028.h"
 #include "LightSensor.h"
 
+#define ALS_CAL_FILE "/sys/bus/i2c/devices/i2c-5/5-0029/cal"
+#define ALS_CAL_SYSFS "/sys/bus/i2c/devices/i2c-5/5-0029/calibration"
+
 /*****************************************************************************/
+
 LightSensor::LightSensor()
-    : SensorBase(LS_DEVICE_NAME, "lightsensor-level"),
+    : SensorBase(NULL, "cm32183-ls"),
       mEnabled(0),
       mInputReader(4),
       mHasPendingEvent(false)
@@ -37,85 +41,124 @@ LightSensor::LightSensor()
     mPendingEvent.sensor = ID_L;
     mPendingEvent.type = SENSOR_TYPE_LIGHT;
     memset(mPendingEvent.data, 0, sizeof(mPendingEvent.data));
+    als_val=0;
+    white_val=0;
 
-    open_device();
-
-    int flags = 0;
-    if (dev_fd > 0) {
-        if (!ioctl(dev_fd, LIGHTSENSOR_IOCTL_GET_ENABLED, &flags)) {
-            if (flags) {
-                mEnabled = 1;
-                setInitialState();
-            }
-        }
+    if (data_fd) {
+        strcat(input_sysfs_path, "/sys/bus/i2c/devices/i2c-5/5-0029/");
+        input_sysfs_path_len = strlen(input_sysfs_path);
+        enable(0, 1);
     }
+
+    if (loadCaliVal())
+        ALOGD("Load calibration data fail");
+    else
+        ALOGD("Load calibration data success");
 }
 
 LightSensor::~LightSensor() {
     if (mEnabled) {
         enable(0, 0);
     }
-    if (dev_fd > 0) {
-        close(dev_fd);
-        dev_fd = -1;
-    }
 }
 
-int LightSensor::setInitialState() {
-    struct input_absinfo absinfo;
-    if ((data_fd > 0) && (!ioctl(data_fd, EVIOCGABS(EVENT_TYPE_LIGHT), &absinfo))) {
-        mPendingEvent.light = indexToValue(absinfo.value);
-        if (mPendingEvent.light != mPreviousLight) {
-        	mHasPendingEvent = true;
-             mPreviousLight = mPendingEvent.light;
-        }
-    }
-    return 0;
-}
-
-int LightSensor::setDelay(int32_t /* handle */, int64_t ns)
+int LightSensor::loadCaliVal()
 {
-    short ms;
-    int ret = -1;
+    int err, ret = 0;
+    int cali_factor = 65535;
+    int cali_value[5] = {0xFF};
+    int cali_factor_check = 0;
 
-    ms = ns / 1000000;
+    FILE *in_fd, *out_fd;
 
-    if (dev_fd < 0) {
-        open_device();
+    out_fd = fopen(ALS_CAL_SYSFS, "w");
+    if (out_fd == NULL) {
+        err = errno;
+        ALOGD("open calibration sysfs %s FAIL: %s", ALS_CAL_SYSFS, strerror(err));
+        return -1;
+    } else {
+        if (out_fd)
+            fclose(out_fd);
     }
 
-    ret = ioctl(dev_fd, LIGHTSENSOR_IOCTL_SET_RATE, &ms);
-    if (ret)
-        LOGE("LIGHTSENSOR_IOCTL_SET_RATE failed\n");
+    in_fd = fopen(ALS_CAL_FILE, "r");
+    if (in_fd == NULL) {
+        err = errno;
+        ALOGD("open calibration data FAIL: %s", strerror(err));
+    } else if (5 != (ret = fscanf(in_fd, "%d %d %d %d %d",  &cali_value[0], \
+            &cali_value[1], &cali_value[2], &cali_value[3], &cali_value[4]))) {
+        err = errno;
+        ALOGD("reading calibration data %s: errno: %d, "   \
+                "possible meaning: %s\n", ALS_CAL_FILE, err,    \
+                strerror(err));
+    }
+
+    int fd;
+    char buf[20];
+
+    cali_factor = cali_value[3] << 24 | cali_value[2] << 16 | \
+            cali_value[1] << 8 | cali_value[0];
+    ALOGD("cali_factor is %d", cali_factor);
+    cali_factor_check = (cali_value[3] | cali_value[2] | \
+            cali_value[1]  | cali_value[0]);
+    ALOGD("cali_factor_check %d", cali_factor_check);
+    if (cali_factor_check != cali_value[4]) {
+        ALOGD("No valid calibration data");
+        return -1;
+    }
+
+    sprintf(buf, "%d %s", cali_factor, "-setcv");
+    fd = open(ALS_CAL_SYSFS, O_RDWR);
+    if (fd < 0) {
+        err = errno;
+        ALOGD("Error writing calibration data %s: errno: %d, "   \
+                "possible meaning: %s\n", ALS_CAL_SYSFS, err,   \
+                 strerror(err));
+        ret = -1;
+    } else {
+        write(fd, buf, sizeof(buf));
+        close(fd);
+        ALOGD("Success loading calibration from %s into %s "     \
+                "with value %d", ALS_CAL_FILE,  \
+                ALS_CAL_SYSFS, cali_factor);
+        ret = 0;
+    }
+
+    if (in_fd)
+        fclose(in_fd);
 
     return ret;
 }
 
-int LightSensor::enable(int32_t, int en) {
-    int flags = en ? 1 : 0;
-    int err = 0;
-    mPreviousLight = -1;
-
-    if (flags != mEnabled) {
-        if (dev_fd < 0) {
-            open_device();
-        }
-        err = ioctl(dev_fd, LIGHTSENSOR_IOCTL_ENABLE, &flags);
-        err = err<0 ? -errno : 0;
-        LOGE_IF(err, "LIGHTSENSOR_IOCTL_ENABLE failed (%s)", strerror(-err));
-        if (!err) {
-            mEnabled = en ? 1 : 0;
-            if (en) {
-                setInitialState();
-            }
-        }
-    }
+int LightSensor::setDelay(int32_t handle, int64_t ns)
+{
     return 0;
 }
 
-int LightSensor::isActivated(int /* handle */)
+int LightSensor::enable(int32_t handle, int en)
 {
-    return mEnabled;
+    int flags = en ? 1 : 0;
+    if (flags != mEnabled) {
+        int fd;
+        strcpy(&input_sysfs_path[input_sysfs_path_len], "enable");
+        fd = open(input_sysfs_path, O_RDWR);
+        if (fd >= 0) {
+            char buf[2];
+            int err;
+            buf[1] = 0;
+            if (flags) {
+                buf[0] = '1';
+            } else {
+                buf[0] = '0';
+            }
+            err = write(fd, buf, sizeof(buf));
+            close(fd);
+            mEnabled = flags;
+            return 0;
+        }
+        return 0;
+    }
+    return 0;
 }
 
 bool LightSensor::hasPendingEvents() const {
@@ -124,6 +167,7 @@ bool LightSensor::hasPendingEvents() const {
 
 int LightSensor::readEvents(sensors_event_t* data, int count)
 {
+    //double lux_gain;
     if (count < 1)
         return -EINVAL;
 
@@ -143,40 +187,28 @@ int LightSensor::readEvents(sensors_event_t* data, int count)
 
     while (count && mInputReader.readEvent(&event)) {
         int type = event->type;
-        if (type == EV_ABS) {
-            if (event->code == EVENT_TYPE_LIGHT) {
-                if (event->value != -1) {
-                    // FIXME: not sure why we're getting -1 sometimes
-                    mPendingEvent.light = indexToValue(event->value);
-                }
+        if (type == EV_REL) {
+            int32_t value = event->value;
+            if (event->code == EVENT_TYPE_ALS_ALS) {
+                als_val = value;
+            } else if (event->code == EVENT_TYPE_ALS_W) {
+                white_val = value;
+                mPendingEvent.data[0] = (int)als_val;
+                mPendingEvent.data[1] = (int)als_val;
+                mPendingEvent.data[2] = (int)white_val;
             }
         } else if (type == EV_SYN) {
-            mPendingEvent.timestamp = getTimestamp();
-            if (mEnabled && (mPendingEvent.light != mPreviousLight)) {
+            mPendingEvent.timestamp = timevalToNano(event->time);
+            if (mEnabled) {
                 *data++ = mPendingEvent;
                 count--;
                 numEventReceived++;
-                mPreviousLight = mPendingEvent.light;
             }
         } else {
-            LOGE("LightSensor: unknown event (type=%d, code=%d)",
+            ALOGE("LightSensor: unknown event (type=%d, code=%d)",
                     type, event->code);
         }
         mInputReader.next();
     }
-
     return numEventReceived;
-}
-
-float LightSensor::indexToValue(size_t index) const
-{
-    static const float luxValues[8] = {
-            10.0, 160.0, 225.0, 320.0,
-            640.0, 1280.0, 2600.0, 10240.0
-    };
-
-    const size_t maxIndex = sizeof(luxValues)/sizeof(*luxValues) - 1;
-    if (index > maxIndex)
-        index = maxIndex;
-    return luxValues[index];
 }
