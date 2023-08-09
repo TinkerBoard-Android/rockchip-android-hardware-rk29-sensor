@@ -106,7 +106,7 @@ sensors_poll_context_t::sensors_poll_context_t()
     mPollFds[light].events = POLLIN;
     mPollFds[light].revents = 0;
 
-    /*mSensors[proximity] = new ProximitySensor();
+    mSensors[proximity] = new ProximitySensor();
     mPollFds[proximity].fd = mSensors[proximity]->getFd();
     mPollFds[proximity].events = POLLIN;
     mPollFds[proximity].revents = 0;
@@ -134,7 +134,7 @@ sensors_poll_context_t::sensors_poll_context_t()
     mSensors[temperature] = new TemperatureSensor();
     mPollFds[temperature].fd = mSensors[temperature]->getFd();
     mPollFds[temperature].events = POLLIN;
-    mPollFds[temperature].revents = 0; */
+    mPollFds[temperature].revents = 0;
 
     int flushFds[2];
     int result = pipe(flushFds);
